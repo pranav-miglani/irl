@@ -1,0 +1,97 @@
+name: Analytics Mirror Config Sync (Daily at 9:30 PM IST)
+
+on:
+  schedule:
+    - cron: "0 16 * * *"   # 9:30 PM IST
+  workflow_dispatch:
+
+jobs:
+  analytics_mirror_config:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Call Analytics Mirror Config API
+        id: api_call
+        run: |
+          RAW_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.ANALYTICS_MIRROR_TOKEN }}" \
+            "${{ secrets.ANALYTICS_MIRROR_URL }}")
+
+          BODY=$(echo "$RAW_RESPONSE" | sed '$d')
+          STATUS=$(echo "$RAW_RESPONSE" | tail -n1)
+          PRETTY=$(echo "$BODY" | jq . 2>/dev/null || echo "$BODY")
+
+          echo "API_STATUS=$STATUS" >> $GITHUB_ENV
+
+          {
+            echo "API_BODY<<EOF"
+            echo "$PRETTY"
+            echo "EOF"
+          } >> $GITHUB_ENV
+
+          echo -e "\n========== RAW API RESPONSE ==========\n"
+          echo "$PRETTY"
+          echo -e "\n=====================================\n"
+
+      - name: WhatsApp Success
+        if: env.API_STATUS == '200'
+        run: |
+          SUMMARY=$(echo "${API_BODY}" | jq -r '.summary')
+          ORGS=$(echo "$SUMMARY" | jq -r '.orgsProcessed // 0')
+          VENDORS=$(echo "$SUMMARY" | jq -r '.vendorsProcessed // 0')
+          PLANTS=$(echo "$SUMMARY" | jq -r '.plantsProcessed // 0')
+          UPDATED=$(echo "$SUMMARY" | jq -r '.plantsUpdated // 0')
+
+          MSG="✔ Analytics%20Mirror%20Sync%20SUCCESS%0AOrgs:%20${ORGS}%0AVendors:%20${VENDORS}%0APlants:%20${PLANTS}%0AUpdated:%20${UPDATED}"
+
+          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
+          for NUMBER in "${PHONES[@]}"; do
+            curl -s \
+              "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=${MSG}&apikey=${{ secrets.WHATSAPP_API_KEY }}"
+          done
+
+      - name: WhatsApp Failure
+        if: env.API_STATUS != '200'
+        run: |
+          ESCAPED_BODY=$(echo "${API_BODY}" \
+            | sed -e 's/"/\\"/g' \
+                  -e ':a;N;$!ba;s/\n/%0A/g')
+
+          MSG="✖ Analytics%20Mirror%20Sync%20FAILED%0AStatus:%20${API_STATUS}%0AResponse:%20${ESCAPED_BODY}"
+
+          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
+          for NUMBER in "${PHONES[@]}"; do
+            curl -s \
+              "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=${MSG}&apikey=${{ secrets.WHATSAPP_API_KEY }}"
+          done
+
+      - name: Summary
+        run: |
+          echo "### 🪞 Analytics Mirror Config Sync (Daily at 9:30 PM IST)" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${API_STATUS}" = "200" ]; then
+            echo "✔ **Success** (200)" >> $GITHUB_STEP_SUMMARY
+
+            ORGS=$(echo "${API_BODY}" | jq -r '.summary.orgsProcessed')
+            VENDORS=$(echo "${API_BODY}" | jq -r '.summary.vendorsProcessed')
+            PLANTS=$(echo "${API_BODY}" | jq -r '.summary.plantsProcessed')
+            UPDATED=$(echo "${API_BODY}" | jq -r '.summary.plantsUpdated')
+
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Orgs Processed | ${ORGS} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Vendors Processed | ${VENDORS} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Plants Processed | ${PLANTS} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Plants Updated | ${UPDATED} |" >> $GITHUB_STEP_SUMMARY
+
+          else
+            echo "✖ **Failed** (${API_STATUS})" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Full JSON Response" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          echo "${API_BODY}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`"
+
