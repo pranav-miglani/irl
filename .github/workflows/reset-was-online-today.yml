@@ -1,0 +1,99 @@
+name: Reset Was Online Today (Daily at 12:05 AM IST)
+
+on:
+  schedule:
+    - cron: "35 18 * * *"   # 12:05 AM IST
+  workflow_dispatch:
+
+jobs:
+  reset_was_online_today:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Call Reset Was Online Today API
+        id: api_call
+        run: |
+          RAW_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Bearer ${{ secrets.JWT_TOKEN }}" \
+            -d "" \
+            "${{ secrets.RESET_WAS_ONLINE_URL }}")
+
+          BODY=$(echo "$RAW_RESPONSE" | sed '$d')
+          STATUS=$(echo "$RAW_RESPONSE" | tail -n1)
+          PRETTY=$(echo "$BODY" | jq . 2>/dev/null || echo "$BODY")
+
+          echo "API_STATUS=$STATUS" >> $GITHUB_ENV
+
+          {
+            echo "API_BODY<<EOF"
+            echo "$PRETTY"
+            echo "EOF"
+          } >> $GITHUB_ENV
+
+          echo -e "\n========== RAW API RESPONSE ==========\n"
+          echo "$PRETTY"
+          echo -e "\n=====================================\n"
+
+
+      - name: WhatsApp Success
+        if: env.API_STATUS == '200'
+        run: |
+          RESET=$(echo "${API_BODY}" | jq -r '.plantsReset // 0')
+          MSG="✔%20Reset%20Was%20Online%20SUCCESS%0APlants%20Reset:%20${RESET}"
+
+          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
+          for NUMBER in "${PHONES[@]}"; do
+            curl -s \
+              "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=${MSG}&apikey=${{ secrets.WHATSAPP_API_KEY }}"
+          done
+
+
+      - name: WhatsApp Failure
+        if: env.API_STATUS != '200'
+        run: |
+          ESCAPED_BODY=$(echo "${API_BODY}" \
+            | sed -e 's/"/\\"/g' \
+                  -e ':a;N;$!ba;s/\n/%0A/g')
+
+          MSG="✖%20Reset%20Was%20Online%20FAILED%0AStatus:%20${API_STATUS}%0AResponse:%20${ESCAPED_BODY}"
+
+          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
+          for NUMBER in "${PHONES[@]}"; do
+            curl -s \
+              "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=${MSG}&apikey=${{ secrets.WHATSAPP_API_KEY }}"
+          done
+
+
+      - name: Summary
+        run: |
+          echo "### 🔄 Reset Was Online Today (Daily at 12:05 AM IST)" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${API_STATUS}" = "200" ]; then
+            echo "✔ **Success** (200)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✖ **Failed** (${API_STATUS})" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${API_STATUS}" = "200" ]; then
+            RESET=$(echo "${API_BODY}" | jq -r '.plantsReset')
+            DURATION=$(echo "${API_BODY}" | jq -r '.duration')
+            REQID=$(echo "${API_BODY}" | jq -r '.requestId')
+
+            echo "### Summary" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Plants Reset | $RESET |" >> $GITHUB_STEP_SUMMARY
+            echo "| Duration | $DURATION |" >> $GITHUB_STEP_SUMMARY
+            echo "| Request ID | $REQID |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Full JSON Response" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          echo "${API_BODY}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`"
+
