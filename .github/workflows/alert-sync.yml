@@ -1,0 +1,69 @@
+name: Invoke Alert Sync API (*/15 4-20 * * *)
+
+on:
+  schedule:
+    # Every 15 minutes from 04:00 to 20:59
+    - cron: "*/15 4-20 * * *"
+  workflow_dispatch:
+
+jobs:
+  alert_sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Call Alert Sync API
+        id: api_call
+        run: |
+          RAW_RESPONSE=$(curl -s -w "\n%{http_code}" "${{ secrets.ALERT_SYNC_API_URL }}")
+          
+          BODY=$(echo "$RAW_RESPONSE" | sed '$d')
+          STATUS=$(echo "$RAW_RESPONSE" | tail -n1)
+
+          PRETTY=$(echo "$BODY" | jq . 2>/dev/null || echo "$BODY")
+
+          echo "API_STATUS=$STATUS" >> $GITHUB_ENV
+          echo "API_BODY=$PRETTY" >> $GITHUB_ENV
+
+          if [ "$STATUS" = "200" ]; then
+            echo -e "✔ \e[32mAPI Call Successful\e[0m"
+          else
+            echo -e "✖ \e[31mAPI Call Failed\e[0m"
+          fi
+
+          echo -e "\n========== API RESPONSE ==========\n"
+          echo "$PRETTY"
+          echo -e "\n=================================\n"
+
+      - name: WhatsApp Success Notification
+        if: env.API_STATUS == '200'
+        run: |
+          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
+          for NUMBER in "${PHONES[@]}"; do
+            curl -s "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=✔%20Alert%20Sync%20SUCCESS%0AStatus:%20200&apikey=${{ secrets.WHATSAPP_API_KEY }}"
+          done
+
+      - name: WhatsApp Failure Notification
+        if: env.API_STATUS != '200'
+        run: |
+          ESCAPED_BODY=$(echo "${API_BODY}" | sed -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/%0A/g')
+          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
+          for NUMBER in "${PHONES[@]}"; do
+            curl -s "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=✖%20Alert%20Sync%20FAILED%0AStatus:%20${API_STATUS}%0AResponse:%20${ESCAPED_BODY}&apikey=${{ secrets.WHATSAPP_API_KEY }}"
+          done
+
+      - name: Summary Output
+        run: |
+          echo "### 📊 Alert Sync Result (*/15 4-20 * * *)" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${API_STATUS}" = "200" ]; then
+            echo "✔ **Success** (Status 200)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✖ **Failed** (Status ${API_STATUS})" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Response JSON" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          echo "${API_BODY}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
