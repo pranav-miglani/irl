@@ -1,0 +1,111 @@
+name: WMS Insolation Morning Sync (Daily at 4 AM IST)
+
+on:
+  schedule:
+    - cron: "30 22 * * *"   # 4 AM IST
+  workflow_dispatch:
+
+jobs:
+  wms_insolation_morning:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Call WMS Insolation Morning API
+        id: api_call
+        run: |
+          RAW_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.JWT_TOKEN }}" \
+            "${{ secrets.WMS_INSOLATION_URL }}")
+
+          BODY=$(echo "$RAW_RESPONSE" | sed '$d')
+          STATUS=$(echo "$RAW_RESPONSE" | tail -n1)
+
+          PRETTY=$(echo "$BODY" | jq . 2>/dev/null || echo "$BODY")
+
+          echo "API_STATUS=$STATUS" >> $GITHUB_ENV
+
+          {
+            echo "API_BODY<<EOF"
+            echo "$PRETTY"
+            echo "EOF"
+          } >> $GITHUB_ENV
+
+          echo -e "\n========== RAW API RESPONSE ==========\n"
+          echo "$PRETTY"
+          echo -e "\n=====================================\n"
+
+      - name: WhatsApp Success
+        if: env.API_STATUS == '200'
+        run: |
+          DATE=$(echo "${API_BODY}" | jq -r '.date // ""')
+          MSG="✔%20WMS%20Morning%20Insolation%20Sync%20SUCCESS%0ADate:%20${DATE}"
+
+          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
+          for NUMBER in "${PHONES[@]}"; do
+            curl -s \
+              "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=${MSG}&apikey=${{ secrets.WHATSAPP_API_KEY }}"
+          done
+
+      - name: WhatsApp Failure
+        if: env.API_STATUS != '200'
+        run: |
+          ESCAPED_BODY=$(echo "${API_BODY}" \
+            | sed -e 's/"/\\"/g' \
+                  -e ':a;N;$!ba;s/\n/%0A/g')
+
+          MSG="✖%20WMS%20Morning%20Insolation%20Sync%20FAILED%0AStatus:%20${API_STATUS}%0AResponse:%20${ESCAPED_BODY}"
+
+          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
+          for NUMBER in "${PHONES[@]}"; do
+            curl -s \
+              "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=${MSG}&apikey=${{ secrets.WHATSAPP_API_KEY }}"
+          done
+
+      - name: Summary
+        run: |
+          echo "### 🌅 WMS Insolation Morning Sync (Daily at 4 AM IST)" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${API_STATUS}" = "200" ]; then
+            echo "✔ **Success** (200)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✖ **Failed** (${API_STATUS})" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          DATE=$(echo "${API_BODY}" | jq -r '.date // ""')
+          echo "**Date Processed:** ${DATE}" >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Vendor Table
+          if [ "${API_STATUS}" = "200" ]; then
+            echo "### Vendor Breakdown" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            echo "| Vendor | Status | Devices Synced | Readings Created | Readings Updated |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|--------|----------------|------------------|------------------|" >> $GITHUB_STEP_SUMMARY
+
+            echo "${API_BODY}" | jq -c '.results[]' | while read -r row; do
+              NAME=$(echo "$row" | jq -r '.wmsVendorName')
+              SUCCESS=$(echo "$row" | jq -r '.success')
+              DEVICES_SYNCED=$(echo "$row" | jq -r '.devicesSynced')
+              CREATED=$(echo "$row" | jq -r '.readingsCreated')
+              UPDATED=$(echo "$row" | jq -r '.readingsUpdated')
+
+              if [ "$SUCCESS" = "true" ]; then
+                STATUS_ICON="✔ Success"
+              else
+                STATUS_ICON="✖ Failed"
+              fi
+
+              echo "| $NAME | $STATUS_ICON | $DEVICES_SYNCED | $CREATED | $UPDATED |" >> $GITHUB_STEP_SUMMARY
+            done
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Full JSON Response" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          echo "${API_BODY}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`"
+
