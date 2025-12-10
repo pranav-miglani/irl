@@ -1,4 +1,4 @@
-name: Sync Plants at 2
+name: Sync Plants : 2am
 
 on:
   schedule:
