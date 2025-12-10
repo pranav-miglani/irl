@@ -1,61 +1,75 @@
-name: Sync Plants 2 am
+name: Plant Sync (Runs daily at 2 AM)
 
 on:
   schedule:
-    - cron: "30 20 * * *"   # Runs daily at 2:00 AM IST (20:30 UTC)
+    - cron: "0 2 * * *"   # 2 AM every day
   workflow_dispatch:
 
 jobs:
-  call_api:
+  plant_sync:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install jq (for JSON parsing)
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Call sync API (URL Hidden)
-        id: sync
+      - name: Call Plant Sync API
+        id: api_call
         run: |
-          echo "Calling Sync API..."
+          RAW_RESPONSE=$(curl -s -w "\n%{http_code}" "${{ secrets.SYNC_API_URL }}")
 
-          RESPONSE=$(curl -s -w "\n%{http_code}" -o response.txt "${{ secrets.SYNC_API_URL }}")
-          BODY=$(cat response.txt)
-          STATUS=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RAW_RESPONSE" | sed '$d')
+          STATUS=$(echo "$RAW_RESPONSE" | tail -n1)
+          PRETTY=$(echo "$BODY" | jq . 2>/dev/null || echo "$BODY")
 
-          echo "HTTP Status: $STATUS"
-          echo "Response Body: $BODY"
+          echo "API_STATUS=$STATUS" >> $GITHUB_ENV
 
-          # Export value for next step
-          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          {
+            echo "API_BODY<<EOF"
+            echo "$PRETTY"
+            echo "EOF"
+          } >> $GITHUB_ENV
 
-          # Fail job if API returns non-200 status
-          if [ "$STATUS" -ne 200 ]; then
-            echo "API FAILED!"
-            exit 1
+          if [ "$STATUS" = "200" ]; then
+            echo -e "✔ \e[32mPlant Sync Successful\e[0m"
+          else
+            echo -e "✖ \e[31mPlant Sync Failed\e[0m"
           fi
 
-      - name: Send WhatsApp Alerts to Multiple Contacts (Free)
-        if: failure()
+          echo -e "\n========== API RESPONSE ==========\n"
+          echo "$PRETTY"
+          echo -e "\n=================================\n"
+
+      - name: WhatsApp Success
+        if: env.API_STATUS == '200'
         run: |
-          echo '${{ secrets.WHATSAPP_CONTACTS }}' > contacts.json
-          LENGTH=$(jq length contacts.json)
-
-          echo "Sending WhatsApp alerts to $LENGTH recipients..."
-
-          for (( i=0; i<${LENGTH}; i++ ))
-          do
-            PHONE=$(jq -r ".[$i].phone" contacts.json)
-            KEY=$(jq -r ".[$i].key" contacts.json)
-
-            echo "Sending alert to $PHONE ..."
-
-            curl -G \
-              --data-urlencode "phone=$PHONE" \
-              --data-urlencode "apikey=$KEY" \
-              --data-urlencode "text=⚠️ ALERT: Plant Sync FAILED! Check GitHub Actions immediately." \
-              https://api.callmebot.com/whatsapp.php
-
-            echo "Alert sent to $PHONE"
-            echo ""
+          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
+          for NUMBER in "${PHONES[@]}"; do
+            curl -s \
+            "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=✔%20Plant%20Sync%20SUCCESS%0AStatus:%20200&apikey=${{ secrets.WHATSAPP_API_KEY }}"
           done
+
+      - name: WhatsApp Failure
+        if: env.API_STATUS != '200'
+        run: |
+          ESCAPED_BODY=$(echo "${API_BODY}" | sed -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/%0A/g')
+
+          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
+          for NUMBER in "${PHONES[@]}"; do
+            curl -s \
+            "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=✖%20Plant%20Sync%20FAILED%0AStatus:%20${API_STATUS}%0AResponse:%20${ESCAPED_BODY}&apikey=${{ secrets.WHATSAPP_API_KEY }}"
+          done
+
+      - name: Summary
+        run: |
+          echo "### 🌱 Plant Sync Result (Runs daily at 2 AM)" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${API_STATUS}" = "200" ]; then
+            echo "✔ **Success** (200)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✖ **Failed** (${API_STATUS})" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Response JSON" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          echo "${API_BODY}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`"
 
