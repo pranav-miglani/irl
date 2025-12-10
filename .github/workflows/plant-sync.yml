@@ -1,8 +1,8 @@
-name: Plant Sync (Daily at 2 AM IST)
+name: Plant Sync (Runs Daily at 2 AM IST)
 
 on:
   schedule:
-    - cron: "30 20 * * *"  # 2:00 AM IST
+    - cron: "30 20 * * *"    # 2 AM IST
   workflow_dispatch:
 
 jobs:
@@ -13,6 +13,7 @@ jobs:
       - name: Call Plant Sync API
         run: |
           RAW_RESPONSE=$(curl -s -w "\n%{http_code}" "${{ secrets.PLANT_SYNC_URL }}")
+
           BODY=$(echo "$RAW_RESPONSE" | sed '$d')
           STATUS=$(echo "$RAW_RESPONSE" | tail -n1)
 
@@ -22,7 +23,7 @@ jobs:
             COLOR="🟥 Failed"
           fi
 
-          echo "### Plant Sync Result (2 AM IST)" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌱 Plant Sync Result (Runs Daily at 2 AM IST)" >> $GITHUB_STEP_SUMMARY
           echo "$COLOR ($STATUS)" >> $GITHUB_STEP_SUMMARY
-          echo "\n\`\`\`json\n$BODY\n\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo -e "\n\`\`\`json\n$BODY\n\`\`\`" >> $GITHUB_STEP_SUMMARY
 

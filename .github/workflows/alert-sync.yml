@@ -1,9 +1,8 @@
-name: Alert Sync (Every 15 minutes, 4 AM → 8 PM IST)
+name: Alert Sync (Every 15 Minutes, 4 AM → 8 PM IST)
 
 on:
   schedule:
-    - cron: "*/15 22-23 * * *"   # 4–5:30 AM IST
-    - cron: "*/15 0-14 * * *"    # 5:30 AM → 8 PM IST
+    - cron: "*/15 22-14 * * *"   # 4 AM to 8 PM IST
   workflow_dispatch:
 
 jobs:
@@ -14,6 +13,7 @@ jobs:
       - name: Call Alert Sync API
         run: |
           RAW_RESPONSE=$(curl -s -w "\n%{http_code}" "${{ secrets.ALERT_SYNC_URL }}")
+
           BODY=$(echo "$RAW_RESPONSE" | sed '$d')
           STATUS=$(echo "$RAW_RESPONSE" | tail -n1)
 
@@ -23,9 +23,29 @@ jobs:
             COLOR="🟥 Failed"
           fi
 
-          echo "### Alert Sync Result (Every 15 mins, 4 AM → 8 PM IST)" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚨 Alert Sync Result (Every 15 Minutes, 4 AM → 8 PM IST)" >> $GITHUB_STEP_SUMMARY
           echo "$COLOR ($STATUS)" >> $GITHUB_STEP_SUMMARY
 
-          echo "\n#### Vendor Breakdown" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`json\n$BODY\n\`\`\`" >> $GITHUB_STEP_SUMMARY
+          # Pretty JSON response
+          echo -e "\n\`\`\`json\n$BODY\n\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+          #
+          # Vendor-level color coding (if your API returns summary.results[])
+          #
+          if echo "$BODY" | jq -e '.summary.results' > /dev/null 2>&1; then
+            echo -e "\n### Vendor Status\n" >> $GITHUB_STEP_SUMMARY
+
+            echo "$BODY" | jq -c '.summary.results[]' | while read -r vendor; do
+              NAME=$(echo "$vendor" | jq -r '.vendorName')
+              SUCCESS=$(echo "$vendor" | jq -r '.success')
+
+              if [[ "$SUCCESS" == "true" ]]; then
+                VCOLOR="🟩"
+              else
+                VCOLOR="🟥"
+              fi
+
+              echo "- $VCOLOR $NAME" >> $GITHUB_STEP_SUMMARY
+            done
+          fi
 
