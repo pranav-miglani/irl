@@ -1,0 +1,97 @@
+name: Analytics Snapshot Energy (Daily at 10 PM IST)
+
+on:
+  schedule:
+    - cron: "30 16 * * *"   # 10 PM IST
+  workflow_dispatch:
+
+jobs:
+  analytics_snapshot_energy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Call Snapshot Energy API
+        id: api_call
+        run: |
+          RAW_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.JWT_TOKEN }}" \
+            "${{ secrets.SNAPSHOT_ENERGY_URL }}")
+
+          BODY=$(echo "$RAW_RESPONSE" | sed '$d')
+          STATUS=$(echo "$RAW_RESPONSE" | tail -n1)
+          PRETTY=$(echo "$BODY" | jq . 2>/dev/null || echo "$BODY")
+
+          echo "API_STATUS=$STATUS" >> $GITHUB_ENV
+
+          {
+            echo "API_BODY<<EOF"
+            echo "$PRETTY"
+            echo "EOF"
+          } >> $GITHUB_ENV
+
+          echo -e "\n========== RAW API RESPONSE ==========\n"
+          echo "$PRETTY"
+          echo -e "\n=====================================\n"
+
+      - name: WhatsApp Success
+        if: env.API_STATUS == '200'
+        run: |
+          MSG="✔%20Analytics%20Snapshot%20Energy%20SUCCESS%0AStatus:%20200"
+
+          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
+          for NUMBER in "${PHONES[@]}"; do
+            curl -s \
+              "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=${MSG}&apikey=${{ secrets.WHATSAPP_API_KEY }}"
+          done
+
+      - name: WhatsApp Failure
+        if: env.API_STATUS != '200'
+        run: |
+          ESCAPED_BODY=$(echo "${API_BODY}" \
+            | sed -e 's/"/\\"/g' \
+                  -e ':a;N;$!ba;s/\n/%0A/g')
+
+          MSG="✖%20Analytics%20Snapshot%20Energy%20FAILED%0AStatus:%20${API_STATUS}%0AResponse:%20${ESCAPED_BODY}"
+
+          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
+          for NUMBER in "${PHONES[@]}"; do
+            curl -s \
+              "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=${MSG}&apikey=${{ secrets.WHATSAPP_API_KEY }}"
+          done
+
+      - name: Summary
+        run: |
+          echo "### 🌙 Analytics Snapshot Energy Sync (Daily at 10 PM IST)" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${API_STATUS}" = "200" ]; then
+            echo "✔ **Success** (200)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✖ **Failed** (${API_STATUS})" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${API_STATUS}" = "200" ]; then
+            VENDORS_PROCESSED=$(echo "${API_BODY}" | jq -r '.summary.vendorsProcessed')
+            VENDORS_SKIPPED=$(echo "${API_BODY}" | jq -r '.summary.vendorsSkipped')
+            VENDORS_ERRORED=$(echo "${API_BODY}" | jq -r '.summary.vendorsErrored')
+            PLANTS_PROCESSED=$(echo "${API_BODY}" | jq -r '.summary.plantsProcessed')
+            UPSERTED=$(echo "${API_BODY}" | jq -r '.summary.rowsUpserted')
+
+            echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Vendors Processed | $VENDORS_PROCESSED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Vendors Skipped | $VENDORS_SKIPPED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Vendors Errored | $VENDORS_ERRORED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Plants Processed | $PLANTS_PROCESSED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Rows Upserted | $UPSERTED |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Full JSON Response" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          echo "${API_BODY}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`"
+
