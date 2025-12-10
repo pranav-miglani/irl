@@ -1,8 +1,12 @@
-name: Alert Sync (Every 15 Minutes, 4 AM → 8 PM IST)
+name: Alert Sync (Every 15 minutes, 4 AM → 8 PM IST)
 
 on:
   schedule:
-    - cron: "*/15 22-14 * * *"   # 4 AM to 8 PM IST
+    # IST = UTC +5:30
+    # 4 AM IST = 22:30 UTC (previous day)
+    # 8 PM IST = 14:30 UTC
+    - cron: "*/15 22-23 * * *"     # 4–5 AM IST
+    - cron: "*/15 0-14 * * *"      # 5:30 AM – 8 PM IST
   workflow_dispatch:
 
 jobs:
@@ -11,41 +15,87 @@ jobs:
 
     steps:
       - name: Call Alert Sync API
+        id: api_call
         run: |
-          RAW_RESPONSE=$(curl -s -w "\n%{http_code}" "${{ secrets.ALERT_SYNC_URL }}")
+          RAW_RESPONSE=$(curl -s -w "\n%{http_code}" "${{ secrets.ALERT_SYNC_API_URL }}")
 
           BODY=$(echo "$RAW_RESPONSE" | sed '$d')
           STATUS=$(echo "$RAW_RESPONSE" | tail -n1)
 
-          if [[ "$STATUS" == "200" ]]; then
-            COLOR="🟩 Success"
+          PRETTY=$(echo "$BODY" | jq . 2>/dev/null || echo "$BODY")
+
+          echo "API_STATUS=$STATUS" >> $GITHUB_ENV
+
+          {
+            echo "API_BODY<<EOF"
+            echo "$PRETTY"
+            echo "EOF"
+          } >> $GITHUB_ENV
+
+          echo -e "\n========== RAW API RESPONSE ==========\n"
+          echo "$PRETTY"
+          echo -e "\n=====================================\n"
+
+      - name: WhatsApp Success
+        if: env.API_STATUS == '200'
+        run: |
+          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
+          for NUMBER in "${PHONES[@]}"; do
+            curl -s \
+            "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=✔%20Alert%20Sync%20SUCCESS%0AStatus:%20200&apikey=${{ secrets.WHATSAPP_API_KEY }}"
+          done
+
+      - name: WhatsApp Failure
+        if: env.API_STATUS != '200'
+        run: |
+          ESCAPED_BODY=$(echo "${API_BODY}" | sed -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/%0A/g')
+
+          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
+          for NUMBER in "${PHONES[@]}"; do
+            curl -s \
+            "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=✖%20Alert%20Sync%20FAILED%0AStatus:%20${API_STATUS}%0AResponse:%20${ESCAPED_BODY}&apikey=${{ secrets.WHATSAPP_API_KEY }}"
+          done
+
+      - name: Summary
+        run: |
+          echo "### 🚨 Alert Sync Result (Every 15 minutes, 4 AM → 8 PM IST)" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${API_STATUS}" = "200" ]; then
+            echo "✔ **Success** (200)" >> $GITHUB_STEP_SUMMARY
           else
-            COLOR="🟥 Failed"
+            echo "✖ **Failed** (${API_STATUS})" >> $GITHUB_STEP_SUMMARY
           fi
 
-          echo "### 🚨 Alert Sync Result (Every 15 Minutes, 4 AM → 8 PM IST)" >> $GITHUB_STEP_SUMMARY
-          echo "$COLOR ($STATUS)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Pretty JSON response
-          echo -e "\n\`\`\`json\n$BODY\n\`\`\`" >> $GITHUB_STEP_SUMMARY
+          # Generate vendor table only if success
+          if [ "${API_STATUS}" = "200" ]; then
+            echo "### Vendor Breakdown" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Vendor | Status | Synced | Created | Updated | Total |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|--------|--------|---------|---------|--------|" >> $GITHUB_STEP_SUMMARY
 
-          #
-          # Vendor-level color coding (if your API returns summary.results[])
-          #
-          if echo "$BODY" | jq -e '.summary.results' > /dev/null 2>&1; then
-            echo -e "\n### Vendor Status\n" >> $GITHUB_STEP_SUMMARY
+            echo "${API_BODY}" | jq -c '.summary.results[]' | while read -r row; do
+              NAME=$(echo "$row" | jq -r '.vendorName')
+              SUCCESS=$(echo "$row" | jq -r '.success')
+              SYNCED=$(echo "$row" | jq -r '.synced')
+              CREATED=$(echo "$row" | jq -r '.created')
+              UPDATED=$(echo "$row" | jq -r '.updated')
+              TOTAL=$(echo "$row" | jq -r '.total')
 
-            echo "$BODY" | jq -c '.summary.results[]' | while read -r vendor; do
-              NAME=$(echo "$vendor" | jq -r '.vendorName')
-              SUCCESS=$(echo "$vendor" | jq -r '.success')
-
-              if [[ "$SUCCESS" == "true" ]]; then
-                VCOLOR="🟩"
+              if [ "$SUCCESS" = "true" ]; then
+                STATUS_ICON="✔ Success"
               else
-                VCOLOR="🟥"
+                STATUS_ICON="✖ Failed"
               fi
 
-              echo "- $VCOLOR $NAME" >> $GITHUB_STEP_SUMMARY
+              echo "| $NAME | $STATUS_ICON | $SYNCED | $CREATED | $UPDATED | $TOTAL |" >> $GITHUB_STEP_SUMMARY
             done
           fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Full JSON Response" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          echo "${API_BODY}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
