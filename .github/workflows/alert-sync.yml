@@ -1,8 +1,9 @@
-name: Alert Sync (Runs every 15 minutes between 4 AM and 8 PM)
+name: Alert Sync (Every 15 minutes, 4 AM → 8 PM IST)
 
 on:
   schedule:
-    - cron: "*/15 4-20 * * *"
+    - cron: "*/15 22-23 * * *"   # 4–5:30 AM IST
+    - cron: "*/15 0-14 * * *"    # 5:30 AM → 8 PM IST
   workflow_dispatch:
 
 jobs:
@@ -11,65 +12,20 @@ jobs:
 
     steps:
       - name: Call Alert Sync API
-        id: api_call
         run: |
-          RAW_RESPONSE=$(curl -s -w "\n%{http_code}" "${{ secrets.ALERT_SYNC_API_URL }}")
-
+          RAW_RESPONSE=$(curl -s -w "\n%{http_code}" "${{ secrets.ALERT_SYNC_URL }}")
           BODY=$(echo "$RAW_RESPONSE" | sed '$d')
           STATUS=$(echo "$RAW_RESPONSE" | tail -n1)
-          PRETTY=$(echo "$BODY" | jq . 2>/dev/null || echo "$BODY")
 
-          echo "API_STATUS=$STATUS" >> $GITHUB_ENV
-
-          {
-            echo "API_BODY<<EOF"
-            echo "$PRETTY"
-            echo "EOF"
-          } >> $GITHUB_ENV
-
-          if [ "$STATUS" = "200" ]; then
-            echo -e "✔ \e[32mAlert Sync Successful\e[0m"
+          if [[ "$STATUS" == "200" ]]; then
+            COLOR="🟩 Success"
           else
-            echo -e "✖ \e[31mAlert Sync Failed\e[0m"
+            COLOR="🟥 Failed"
           fi
 
-          echo -e "\n========== API RESPONSE ==========\n"
-          echo "$PRETTY"
-          echo -e "\n=================================\n"
+          echo "### Alert Sync Result (Every 15 mins, 4 AM → 8 PM IST)" >> $GITHUB_STEP_SUMMARY
+          echo "$COLOR ($STATUS)" >> $GITHUB_STEP_SUMMARY
 
-      - name: WhatsApp Success
-        if: env.API_STATUS == '200'
-        run: |
-          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
-          for NUMBER in "${PHONES[@]}"; do
-            curl -s \
-            "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=✔%20Alert%20Sync%20SUCCESS%0AStatus:%20200&apikey=${{ secrets.WHATSAPP_API_KEY }}"
-          done
-
-      - name: WhatsApp Failure
-        if: env.API_STATUS != '200'
-        run: |
-          ESCAPED_BODY=$(echo "${API_BODY}" | sed -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/%0A/g')
-
-          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
-          for NUMBER in "${PHONES[@]}"; do
-            curl -s \
-            "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=✖%20Alert%20Sync%20FAILED%0AStatus:%20${API_STATUS}%0AResponse:%20${ESCAPED_BODY}&apikey=${{ secrets.WHATSAPP_API_KEY }}"
-          done
-
-      - name: Summary
-        run: |
-          echo "### 🚨 Alert Sync Result (Every 15 minutes, 4 AM → 8 PM)" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${API_STATUS}" = "200" ]; then
-            echo "✔ **Success** (200)" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "✖ **Failed** (${API_STATUS})" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### Response JSON" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
-          echo "${API_BODY}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`"
+          echo "\n#### Vendor Breakdown" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json\n$BODY\n\`\`\`" >> $GITHUB_STEP_SUMMARY
 

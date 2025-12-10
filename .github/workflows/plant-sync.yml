@@ -1,8 +1,8 @@
-name: Plant Sync (Runs daily at 2 AM)
+name: Plant Sync (Daily at 2 AM IST)
 
 on:
   schedule:
-    - cron: "0 2 * * *"   # 2 AM every day
+    - cron: "30 20 * * *"  # 2:00 AM IST
   workflow_dispatch:
 
 jobs:
@@ -11,65 +11,18 @@ jobs:
 
     steps:
       - name: Call Plant Sync API
-        id: api_call
         run: |
-          RAW_RESPONSE=$(curl -s -w "\n%{http_code}" "${{ secrets.SYNC_API_URL }}")
-
+          RAW_RESPONSE=$(curl -s -w "\n%{http_code}" "${{ secrets.PLANT_SYNC_URL }}")
           BODY=$(echo "$RAW_RESPONSE" | sed '$d')
           STATUS=$(echo "$RAW_RESPONSE" | tail -n1)
-          PRETTY=$(echo "$BODY" | jq . 2>/dev/null || echo "$BODY")
 
-          echo "API_STATUS=$STATUS" >> $GITHUB_ENV
-
-          {
-            echo "API_BODY<<EOF"
-            echo "$PRETTY"
-            echo "EOF"
-          } >> $GITHUB_ENV
-
-          if [ "$STATUS" = "200" ]; then
-            echo -e "✔ \e[32mPlant Sync Successful\e[0m"
+          if [[ "$STATUS" == "200" ]]; then
+            COLOR="🟩 Success"
           else
-            echo -e "✖ \e[31mPlant Sync Failed\e[0m"
+            COLOR="🟥 Failed"
           fi
 
-          echo -e "\n========== API RESPONSE ==========\n"
-          echo "$PRETTY"
-          echo -e "\n=================================\n"
-
-      - name: WhatsApp Success
-        if: env.API_STATUS == '200'
-        run: |
-          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
-          for NUMBER in "${PHONES[@]}"; do
-            curl -s \
-            "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=✔%20Plant%20Sync%20SUCCESS%0AStatus:%20200&apikey=${{ secrets.WHATSAPP_API_KEY }}"
-          done
-
-      - name: WhatsApp Failure
-        if: env.API_STATUS != '200'
-        run: |
-          ESCAPED_BODY=$(echo "${API_BODY}" | sed -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/%0A/g')
-
-          IFS=',' read -ra PHONES <<< "${{ secrets.WHATSAPP_NUMBERS }}"
-          for NUMBER in "${PHONES[@]}"; do
-            curl -s \
-            "https://api.callmebot.com/whatsapp.php?phone=$NUMBER&text=✖%20Plant%20Sync%20FAILED%0AStatus:%20${API_STATUS}%0AResponse:%20${ESCAPED_BODY}&apikey=${{ secrets.WHATSAPP_API_KEY }}"
-          done
-
-      - name: Summary
-        run: |
-          echo "### 🌱 Plant Sync Result (Runs daily at 2 AM)" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${API_STATUS}" = "200" ]; then
-            echo "✔ **Success** (200)" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "✖ **Failed** (${API_STATUS})" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### Response JSON" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
-          echo "${API_BODY}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`"
+          echo "### Plant Sync Result (2 AM IST)" >> $GITHUB_STEP_SUMMARY
+          echo "$COLOR ($STATUS)" >> $GITHUB_STEP_SUMMARY
+          echo "\n\`\`\`json\n$BODY\n\`\`\`" >> $GITHUB_STEP_SUMMARY
 
