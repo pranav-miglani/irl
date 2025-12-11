@@ -1,4 +1,4 @@
-name: Alert Sync (Every 15 minutes, 4 AM → 8 PM IST)
+name: Alert Sync (Every hour, 4 AM → 8 PM IST)
 
 on:
   schedule:
