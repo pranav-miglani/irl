@@ -91,7 +91,7 @@ jobs:
                 STATUS_ICON="✖ Failed"
               fi
 
-              echo "| $NAME | $STATUS_ICON | $SYNCED | $CREATED | $UPDATED | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+              echo "| $NAME | $STATUS_ICON | $SYNCED | $CREATED | $UPDATED | $SKIPPED | $TOTAL |" >> $GITHUB_STEP_SUMMARY
             done
           fi
 
